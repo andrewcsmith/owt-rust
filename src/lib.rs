@@ -1,6 +1,6 @@
 extern crate nalgebra as na;
-use na::{DVec, DMat};
-use std::iter::FromIterator;
+use na::{DVec, DMat, Norm, Transpose, Inv, Diag, Iterable};
+use std::iter::{FromIterator, Iterator, IntoIterator};
 
 struct OWTCriteria {
     title: &'static str,
@@ -38,7 +38,7 @@ impl OWTCriteria {
     }
 
     fn populate_ideal_interval_vector(&self) -> DVec<f64> {
-        let vec_size = (self.num_pitches * (self.num_pitches - 1));
+        let vec_size = self.num_pitches * (self.num_pitches - 1);
         DVec::<f64>::from_iter((0..vec_size).map(|i| {
             let base = i / self.num_pitches;
             let incr = i % self.num_pitches;
@@ -50,12 +50,31 @@ impl OWTCriteria {
             }
         }))
     }
+
+    fn populate_weights_vector(&self) -> DVec<f64> {
+        let vec_size = self.num_pitches * (self.num_pitches - 1);
+        DVec::<f64>::from_iter((0..vec_size).map(|i| {
+            let base = i / self.num_pitches;
+            let incr = i % self.num_pitches;
+            self.interval_weights[base as usize] * self.key_weights[incr as usize]
+        }))
+    }
+
+    fn optimize_temperament(&self) -> DVec<f64> {
+        let source_matrix = self.populate_source_matrix();
+        let ideal_intervals_vector = self.populate_ideal_interval_vector();
+        let weights_vector = DMat::from_diag(&self.populate_weights_vector());
+        match (&source_matrix.transpose() * &weights_vector * &source_matrix).inv() {
+            Some(x) => { x * &source_matrix.transpose() * &weights_vector * ideal_intervals_vector },
+            None => { panic!("What!!") }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::OWTCriteria;
-    use na::{DVec, DMat};
+    use na::{DVec, DMat, Iterable};
 
     fn get_criteria() -> OWTCriteria {
         OWTCriteria {
@@ -63,8 +82,8 @@ mod tests {
             num_pitches: 3,
             repeat_factor: 1200.0,
             ideal_intervals: DVec::from_slice(2, &vec![0.0, 702.0]),
-            interval_weights: DVec::from_slice(2, &vec![0.000001, 1.0]),
-            key_weights: DVec::from_slice(3, &vec![1.0, 0.0001, 1.0])
+            interval_weights: DVec::from_slice(2, &vec![1.0e-6, 1.0]),
+            key_weights: DVec::from_slice(3, &vec![1.0, 1.0e-4, 1.0])
         }
     }
 
@@ -88,5 +107,23 @@ mod tests {
         let exp = DVec::from_slice(6, &vec![0.0, 0.0, -1200.0, 702.0, -498.0, -498.0]);
         let res = criteria.populate_ideal_interval_vector();
         assert_eq!(exp, res);
+    }
+
+    #[test]
+    fn test_populate_weights_vector() {
+        let criteria = get_criteria();
+        let exp = DVec::from_slice(6, &vec![1.0e-6, 1.0e-10, 1.0e-6, 1.0, 1.0e-4, 1.0]);
+        let res = criteria.populate_weights_vector();
+        assert_eq!(exp, res);
+    }
+
+    #[test]
+    fn test_optimize_temperament() {
+        let criteria = get_criteria();
+        let exp = DVec::from_slice(2, &vec![204.059, 702.030]);
+        let res = criteria.optimize_temperament();
+        for (e, r) in exp.iter().zip(res.iter()) {
+            assert!((e - r).abs() < 0.01);
+        }
     }
 }
